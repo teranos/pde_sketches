@@ -1,0 +1,6 @@
+bin/
+.dub/
+dub.selections.json
+*.o
+textures/node_modules/
+textures/build/

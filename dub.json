@@ -1,0 +1,12 @@
+{
+	"name": "sketches",
+	"description": "Processing sketches on the right side, paged and tuned from the Noodle Pad",
+	"targetType": "executable",
+	"targetPath": "bin",
+	"sourcePaths": [
+		"source"
+	],
+	"dflags-ldc": [
+		"-O2"
+	]
+}

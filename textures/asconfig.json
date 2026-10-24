@@ -1,0 +1,13 @@
+{
+  "targets": {
+    "release": {
+      "outFile": "build/release.wasm",
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "noAssert": true
+    }
+  },
+  "options": {
+    "bindings": "esm"
+  }
+}

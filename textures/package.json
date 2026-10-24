@@ -1,0 +1,8 @@
+{
+  "name": "sketches-textures",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "assemblyscript": "^0.28.20"
+  }
+}
