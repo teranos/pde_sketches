@@ -345,7 +345,7 @@ class Walker {
   float[] ink; // per cell, the length of line drawn in it, in cells
   ArrayList<ArrayList<float[]>> formsIn = new ArrayList<ArrayList<float[]>>(); // per cell: x, y, heading, 1 for a triangle, red, green, blue
   float follow = 3; // how hard the white of the picture pulls
-  float thin = 0.4; // the weight of a line where the picture is not
+  float thin = 0.3; // the weight of a line where the picture is black, or not there
   float grip = 0.2; // the chance a step through the darkest ends the run
   java.awt.image.BufferedImage source; // the picture, as read
   boolean tried;
@@ -556,23 +556,26 @@ class Walker {
     return sum;
   }
 
-  // Whether the picture is under this point. With no picture, everywhere.
-  boolean onPicture(float px, float py) {
-    return shown == null || (px >= shownX && px < shownX + shown.width && py >= shownY && py < shownY + shown.height);
-  }
-
-  void drawForm(PGraphics g, float[] f) {
-    g.strokeWeight(1);
+  // A form with its border, thin and dim, or without, just inside where the border was.
+  void drawForm(PGraphics g, float[] f, boolean border) {
+    float r = f[3] > 0.5 ? mark * 1.4 : mark;
+    if (border) {
+      g.stroke(170);
+      g.strokeWeight(lerp(thin, 0.6, lightAt(f[0], f[1])));
+    } else {
+      g.noStroke();
+      r -= 0.7;
+    }
     g.fill(f[4], f[5], f[6]);
     if (f[3] > 0.5) {
-      float r = mark * 1.4;
       g.triangle(f[0] + cos(f[2]) * r, f[1] + sin(f[2]) * r,
           f[0] + cos(f[2] + TWO_PI / 3) * r, f[1] + sin(f[2] + TWO_PI / 3) * r,
           f[0] + cos(f[2] - TWO_PI / 3) * r, f[1] + sin(f[2] - TWO_PI / 3) * r);
     } else {
-      g.ellipse(f[0], f[1], mark * 2, mark * 2);
+      g.ellipse(f[0], f[1], r * 2, r * 2);
     }
     g.noFill();
+    g.stroke(255);
   }
 
   // The forms near a point are drawn again, over the line that just ran there.
@@ -581,7 +584,7 @@ class Walker {
     for (int ay = max(cy - 1, 0); ay <= min(cy + 1, rows - 1); ay++) {
       for (int ax = max(cx - 1, 0); ax <= min(cx + 1, cols - 1); ax++) {
         for (float[] f : formsIn.get(ay * cols + ax)) {
-          if (dist(px, py, f[0], f[1]) < mark * 2.4) drawForm(g, f);
+          if (dist(px, py, f[0], f[1]) < mark * 2.4) drawForm(g, f, false);
         }
       }
     }
@@ -614,7 +617,7 @@ class Walker {
           turn(g, i, diagonals, triangles, false);
           continue;
         }
-        g.strokeWeight(onPicture((x[i] + nx) / 2, (y[i] + ny) / 2) ? 1 : thin);
+        g.strokeWeight(lerp(thin, 1, lightAt((x[i] + nx) / 2, (y[i] + ny) / 2)));
         g.line(x[i], y[i], nx, ny);
         ink[at((x[i] + nx) / 2, (y[i] + ny) / 2)] += d / cell;
         cover(g, (x[i] + nx) / 2, (y[i] + ny) / 2);
@@ -696,6 +699,6 @@ class Walker {
     float[] under = behind(x[i], y[i]);
     float[] f = {x[i], y[i], a, random(1) < triangles ? 1 : 0, under[0], under[1], under[2]};
     formsIn.get(at(f[0], f[1])).add(f);
-    drawForm(g, f);
+    drawForm(g, f, true);
   }
 }
