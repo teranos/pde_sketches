@@ -81,6 +81,8 @@ public class Runner {
         map.putInt(16, SLOTS);
         map.putInt(12, next);
         seq = next;
+        String saved = s.takeSaved();
+        if (saved != null) System.out.println("s " + saved);
         System.out.println("f");
         System.out.flush();
       }

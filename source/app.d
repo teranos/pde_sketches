@@ -129,6 +129,7 @@ void main()
     auto lastCheck = MonoTime.currTime;
     ubyte[512] buf;
     ubyte[256] out_;
+    string pending; // what the renderer has said of a line not yet whole
 
     auto lastTick = MonoTime.currTime;
     for (;;)
@@ -224,7 +225,13 @@ void main()
         {
             const got = read(r.fd, out_.ptr, out_.length);
             if (got > 0)
-                tell("frame " ~ name);
+            {
+                const heard = hear(pending, cast(const(char)[]) out_[0 .. got]);
+                if (heard.frame)
+                    tell("frame " ~ name);
+                foreach (path; heard.saved)
+                    tell("clip " ~ name ~ " " ~ path);
+            }
             else
             {
                 // The renderer died: start it again, told everything.

@@ -95,6 +95,7 @@ boolean walkPaused;
 boolean snapshotNext;
 String savedAs = ""; // the last snapshot, by file name
 long savedAt; // and when, so the HUD names it for a few seconds
+String unsaid; // its whole path, until the host has been told
 
 // The walker's own line: its speed, which the wheel moves, then its three,
 // then how much of the picture it follows shows, whether the wheel has it,
@@ -121,9 +122,18 @@ void saveSnapshot() {
   java.io.File dir = new java.io.File(new java.io.File(path).getAbsoluteFile().getParentFile(), "captures");
   dir.mkdirs();
   String name = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date()) + "-" + PAGES[page] + ".png";
-  pg.get(0, 0, pg.width, page == WALKER ? pg.height - walker.hudRows : pg.height).save(new java.io.File(dir, name).getAbsolutePath());
+  String file = new java.io.File(dir, name).getAbsolutePath();
+  pg.get(0, 0, pg.width, page == WALKER ? pg.height - walker.hudRows : pg.height).save(file);
   savedAs = name;
   savedAt = System.currentTimeMillis();
+  unsaid = file;
+}
+
+// The path of a snapshot not yet reported, once.
+String takeSaved() {
+  String file = unsaid;
+  unsaid = null;
+  return file;
 }
 
 // A drawing surface that is clear where nothing is drawn.

@@ -195,6 +195,57 @@ double wrapDay(double t)
     return t - floor(t);
 }
 
+/// What the renderer said: `f` for a frame, `s <path>` for a snapshot it saved.
+struct Heard
+{
+    bool frame;
+    string[] saved;
+}
+
+/// Takes what the renderer wrote, which can end mid-line, and returns what its
+/// whole lines said. The rest waits in `pending` for the next read.
+Heard hear(ref string pending, const(char)[] chunk)
+{
+    import std.algorithm : startsWith;
+    import std.string : indexOf;
+
+    Heard h;
+    pending ~= chunk;
+    for (;;)
+    {
+        const nl = pending.indexOf('\n');
+        if (nl < 0)
+            break;
+        const line = pending[0 .. nl].strip;
+        pending = pending[nl + 1 .. $];
+        if (line.startsWith("s "))
+            h.saved ~= line[2 .. $].idup;
+        else if (line.length)
+            h.frame = true;
+    }
+    return h;
+}
+
+unittest
+{
+    string pending;
+
+    // A frame, and two in one read, are a frame.
+    assert(hear(pending, "f\n").frame && !hear(pending, "f\n").saved.length);
+    assert(hear(pending, "f\nf\n").frame);
+
+    // A snapshot's path survives its spaces, and arrives with the frame it was made in.
+    auto h = hear(pending, "s /tmp/a b/x.png\nf\n");
+    assert(h.frame && h.saved == ["/tmp/a b/x.png"]);
+
+    // A line cut across two reads is whole when the rest comes.
+    h = hear(pending, "s /tmp/cu");
+    assert(!h.frame && !h.saved.length && pending == "s /tmp/cu");
+    h = hear(pending, "t.png\nf");
+    assert(h.saved == ["/tmp/cut.png"] && !h.frame && pending == "f");
+    assert(hear(pending, "\n").frame && pending == "");
+}
+
 /// What a word did, so the caller knows what to say back.
 enum Change
 {
