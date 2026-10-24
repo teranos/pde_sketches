@@ -36,7 +36,7 @@ mv "$tmp" bin/classes
 # Written with the paths this build used, so what runs is what was built.
 cat > bin/renderer.new <<EOF
 #!/usr/bin/env bash
-exec "$JAVA" -Djava.awt.headless=true -Dsketches.node="$NODE" -Dsketches.gen="$PWD/textures/gen.js" -cp "$PWD/bin/classes:$CORE" Runner "\$@"
+exec "$JAVA" -Djava.awt.headless=true -Dsketches.node="$NODE" -Dsketches.gen="$PWD/textures/gen.js" -Dsketches.image="$PWD/image/walker.jpg" -cp "$PWD/bin/classes:$CORE" Runner "\$@"
 EOF
 chmod +x bin/renderer.new
 mv bin/renderer.new bin/renderer

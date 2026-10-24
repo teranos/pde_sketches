@@ -5,3 +5,4 @@ dub.selections.json
 textures/node_modules/
 textures/build/
 .tools/
+image/

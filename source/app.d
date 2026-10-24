@@ -117,6 +117,14 @@ void main()
     long[] stamps;
     foreach (b; builds)
         stamps ~= stamp(b);
+    // When the sketch was built, local, so a relaunch can say which build it is.
+    const built = {
+        import std.file : timeLastModified;
+
+        const t = timeLastModified(builds[1]);
+        return format("%02d:%02d:%02d", t.hour, t.minute, t.second);
+    }();
+    bool greeted;
     auto lastAnnounce = MonoTime.zero;
     auto lastCheck = MonoTime.currTime;
     ubyte[512] buf;
@@ -133,6 +141,11 @@ void main()
             tell(format("source %s %s %s %s", name, framePath, wordsPath, getpid()));
             tell(legend(st));
             lastAnnounce = now;
+            if (!greeted)
+            {
+                greeted = true;
+                tell("toast " ~ name ~ " built " ~ built);
+            }
         }
 
         // A new build of either half relaunches the whole: the host execs
@@ -162,7 +175,7 @@ void main()
 
         if (fds[0].revents & POLLIN)
         {
-            bool tellRenderer, tellLegend, sizeChanged;
+            bool tellRenderer, tellLegend, sizeChanged, wipe;
             string said;
             for (;;)
             {
@@ -179,6 +192,7 @@ void main()
                     continue;
                 }
                 tellRenderer = true;
+                wipe |= c == Change.reset;
                 if (c != Change.value && c != Change.time)
                     tellLegend = true;
                 if (auto t = toast(st, c, msg))
@@ -189,6 +203,8 @@ void main()
             if (tellRenderer)
             {
                 r.tell(st.forRenderer);
+                if (wipe)
+                    r.tell("reset");
                 try
                     write(statePath, st.save);
                 catch (Exception)

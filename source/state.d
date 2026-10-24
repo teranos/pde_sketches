@@ -10,19 +10,22 @@ import std.string : join, split, strip;
 /// file, and says `f` each time a frame is in.
 enum name = "sketches";
 
-immutable string[4] pages = ["particles", "lines", "startfield", "scene"];
+immutable string[5] pages = ["particles", "lines", "startfield", "scene", "walker"];
 enum scenePage = 3;
+enum walkerPage = 4;
 
-/// The middle row, left to right, per page.
-immutable string[3][3] paramNames = [
+/// The middle row, left to right, per page. The scene's row is its params.
+immutable string[3][pages.length] paramNames = [
     ["count", "speed", "size"],
     ["count", "speed", "twist"],
     ["stars", "speed", "trail"],
+    ["hue", "saturation", "scale"],
+    ["walkers", "diagonals", "triangles"],
 ];
 
 /// What the scene's bottom row pages between, and what any of them takes.
 immutable string[5] things = ["sky", "ground", "trunks", "lake", "mist"];
-immutable string[3] sceneParams = ["hue", "saturation", "scale"];
+immutable string[3] sceneParams = paramNames[scenePage];
 
 /// One knob detent moves every locked parameter this far, on 0..1.
 enum step = 0.02;
@@ -36,8 +39,12 @@ enum cycleSeconds = 180.0;
 struct State
 {
     size_t page;
-    double[3][3] value = [[0.4, 0.3, 0.3], [0.3, 0.3, 0.4], [0.5, 0.3, 0.3]];
-    bool[3][3] locked;
+    /// Per page. The scene's row is unused: it keeps its values per thing.
+    double[3][pages.length] value = [[0.4, 0.3, 0.3], [0.3, 0.3, 0.4], [0.5, 0.3, 0.3], [0.5, 0.5, 0.5], [0.3, 0.5, 0.2]];
+    bool[3][pages.length] locked;
+    double walkerSpeed = 0.4; /// the walker's wheel, while nothing on its page is locked
+    double walkerImage = 0; /// how much of the picture the walker follows shows through, 0..1
+    bool imageHeld; /// BL: the walker's wheel sets the picture's opacity
     uint width, height;
 
     double time = 0.22; /// of the day, 0..1, from midnight
@@ -69,15 +76,34 @@ struct State
         foreach (t; 0 .. things.length)
             foreach (i; 0 .. 3)
                 f ~= sceneLocked[t][i] ? "1" : "0";
+        foreach (i; 0 .. 3)
+            f ~= format("%.4f", value[walkerPage][i]);
+        foreach (i; 0 .. 3)
+            f ~= locked[walkerPage][i] ? "1" : "0";
+        f ~= format("%.4f", walkerSpeed);
+        f ~= [format("%.4f", walkerImage), imageHeld ? "1" : "0"];
         return f.join(" ");
     }
 
     /// Reads a line from before the scene (19 fields), from when it had
-    /// three things (40), and as it is now (52).
+    /// three things (40), from before the walker (52), from before its
+    /// picture (59), and as it is now (61).
     static State load(string line)
     {
         State st;
         auto f = line.strip.split;
+        string[] walker;
+        string[] image;
+        if (f.length == 19 + 3 + things.length * 6 + 7 + 2)
+        {
+            image = f[$ - 2 .. $];
+            f = f[0 .. $ - 2];
+        }
+        if (f.length == 19 + 3 + things.length * 6 + 7)
+        {
+            walker = f[$ - 7 .. $];
+            f = f[0 .. $ - 7];
+        }
         size_t n;
         if (f.length == 40)
             n = 3;
@@ -106,6 +132,20 @@ struct State
                         st.sceneLocked[t][i] = f[22 + n * 3 + t * 3 + i] == "1";
                     }
             }
+            if (walker.length)
+            {
+                foreach (i; 0 .. 3)
+                {
+                    st.value[walkerPage][i] = walker[i].to!double;
+                    st.locked[walkerPage][i] = walker[3 + i] == "1";
+                }
+                st.walkerSpeed = walker[6].to!double;
+            }
+            if (image.length)
+            {
+                st.walkerImage = image[0].to!double;
+                st.imageHeld = image[1] == "1";
+            }
         }
         catch (Exception)
             return State.init;
@@ -127,6 +167,11 @@ struct State
                     f ~= sceneLocked[t][i] ? "1" : "0";
             return f.join(" ");
         }
+        if (page == walkerPage)
+            return format("walker %.4f %.4f %.4f %.4f %d %d %d %.4f %d", walkerSpeed,
+                    value[walkerPage][0], value[walkerPage][1], value[walkerPage][2],
+                    locked[walkerPage][0], locked[walkerPage][1], locked[walkerPage][2],
+                    walkerImage, imageHeld);
         return format("state %s %.4f %.4f %.4f %d %d %d", pages[page],
                 value[page][0], value[page][1], value[page][2],
                 locked[page][0], locked[page][1], locked[page][2]);
@@ -158,6 +203,8 @@ enum Change
     time,
     thing,
     thingLock,
+    reset,
+    image,
 }
 
 size_t middle(string key)
@@ -218,6 +265,15 @@ Change handle(ref State st, string msg)
             return Change.lock;
         case "BL":
         case "BR":
+            // On the walker page BL hands the wheel to the picture's opacity.
+            if (w[1] == "BL" && st.page == walkerPage)
+            {
+                st.imageHeld = !st.imageHeld;
+                return Change.image;
+            }
+            // On the walker page BR starts the walk over.
+            if (w[1] == "BR" && st.page == walkerPage)
+                return Change.reset;
             // The scene's pager, between things, while none is locked.
             if (!scene || st.thingLocked)
                 return Change.none;
@@ -242,6 +298,17 @@ Change handle(ref State st, string msg)
             st.time = wrapDay(st.time + dir * timeStep);
             return Change.time;
         }
+        if (st.page == walkerPage && st.imageHeld)
+        {
+            st.walkerImage = clamp(st.walkerImage + dir * step, 0.0, 1.0);
+            return Change.value;
+        }
+        // The walker's wheel is its speed until one of its parameters is locked.
+        if (st.page == walkerPage && !(st.locked[walkerPage][0] || st.locked[walkerPage][1] || st.locked[walkerPage][2]))
+        {
+            st.walkerSpeed = clamp(st.walkerSpeed + dir * step, 0.0, 1.0);
+            return Change.value;
+        }
         // Every locked parameter moves together.
         bool moved;
         foreach (i; 0 .. 3)
@@ -262,7 +329,7 @@ Change handle(ref State st, string msg)
 unittest
 {
     State st;
-    assert(st.handle("down TL") == Change.page && st.page == 3, "TL wraps left to the last page");
+    assert(st.handle("down TL") == Change.page && st.page == walkerPage, "TL wraps left to the last page");
     assert(st.handle("down TR") == Change.page && st.page == 0);
     assert(st.handle("down TR") == Change.page && st.page == 1);
     st.page = 0;
@@ -324,12 +391,15 @@ unittest
     auto f = three.save.split;
     const forty = (f[0 .. 22] ~ f[22 .. 31] ~ f[37 .. 46]).join(" ");
     const was = State.load(forty);
-    assert(was.sceneValue[1][2] == 0.7 && was.sceneLocked[2][0] && !was.sceneLocked[3][0]);
+    // Phobos 2.112's to!double can land an ulp off a decimal, so parsed values get a tolerance.
+    assert(was.sceneValue[1][2] - 0.7 < 1e-4 && 0.7 - was.sceneValue[1][2] < 1e-4);
+    assert(was.sceneLocked[2][0] && !was.sceneLocked[3][0]);
     assert(was.sceneValue[3] == [0.5, 0.5, 0.5] && was.sceneValue[4] == [0.5, 0.5, 0.5]);
 
     // A line from before the scene still loads, the scene at its defaults.
     const old = State.load("1 0.4 0.3 0.3 0.6 0.6 0.4 0.5 0.3 0.3 0 0 0 1 1 0 0 0 0");
-    assert(old.page == 1 && old.value[1][0] == 0.6 && old.locked[1][0] && old.time == State.init.time);
+    assert(old.page == 1 && old.value[1][0] - 0.6 < 1e-4 && 0.6 - old.value[1][0] < 1e-4);
+    assert(old.locked[1][0] && old.time == State.init.time);
 }
 
 unittest
@@ -381,6 +451,79 @@ unittest
     assert(st.sceneValue[2][0] == 0.5 + step);
 }
 
+unittest
+{
+    import std.algorithm : canFind;
+
+    State st;
+    st.page = walkerPage;
+
+    // Its middle row locks and the wheel moves what is locked, as on the first three pages.
+    assert(st.forRenderer == "walker 0.4000 0.3000 0.5000 0.2000 0 0 0 0.0000 0");
+    assert(legend(st).canFind("turn: speed|page right|lock walkers|lock diagonals|lock triangles|image opacity|free|reset"));
+
+    // Nothing locked: the wheel is the walker's speed, and BR starts it over.
+    const speed = st.walkerSpeed;
+    assert(st.handle("turn cw") == Change.value && st.walkerSpeed == speed + step);
+    assert(st.value[walkerPage] == [0.3, 0.5, 0.2]);
+    assert(st.handle("down BR") == Change.reset);
+    assert(toast(st, Change.reset, "down BR") == "reset");
+
+    // Locked, the wheel moves the parameter and leaves the speed alone.
+    assert(st.handle("down MC") == Change.lock && st.locked[walkerPage][1]);
+    assert(toast(st, Change.lock, "down MC") == "locked diagonals");
+    assert(legend(st).canFind("turn: locked"));
+    const diagonals = st.value[walkerPage][1];
+    assert(st.handle("turn cw") == Change.value && st.value[walkerPage][1] == diagonals + step);
+    assert(st.value[walkerPage][0] == 0.3 && st.value[walkerPage][2] == 0.2);
+    assert(st.walkerSpeed == speed + step);
+
+    // BL hands the wheel to the picture's opacity: it moves that alone, and BL gives it back.
+    assert(st.handle("down BL") == Change.image && st.imageHeld);
+    assert(toast(st, Change.image, "down BL") == "wheel: image opacity");
+    assert(legend(st).canFind("turn: opacity") && legend(st).canFind("release opacity"));
+    assert(st.handle("turn cw") == Change.value && st.walkerImage == step);
+    assert(st.value[walkerPage][1] == diagonals + step && st.walkerSpeed == speed + step);
+    assert(st.forRenderer == format("walker %.4f 0.3000 %.4f 0.2000 0 1 0 0.0200 1", st.walkerSpeed, st.value[walkerPage][1]));
+    foreach (_; 0 .. 100)
+        st.handle("turn cw");
+    assert(st.walkerImage == 1.0, "clamped to 0..1");
+    assert(st.handle("down BL") == Change.image && !st.imageHeld);
+    assert(st.handle("turn cw") == Change.value && st.walkerImage == 1.0, "released: the wheel is the locked parameter again");
+
+    // The pager reaches it from the scene and goes round to the first page.
+    st.page = scenePage;
+    assert(st.handle("down TR") == Change.page && st.page == walkerPage);
+    assert(toast(st, Change.page, "down TR") == "walker");
+    assert(st.handle("down TR") == Change.page && st.page == 0);
+}
+
+unittest
+{
+    State st;
+    st.value[walkerPage] = [0.1, 0.2, 0.75];
+    st.locked[walkerPage][0] = true;
+    st.walkerSpeed = 0.9;
+    st.walkerImage = 0.35;
+    st.imageHeld = true;
+    auto f = st.save.split;
+    assert(f.length == 61);
+    const back = State.load(st.save);
+    assert(back.imageHeld && back.walkerImage - 0.35 < 1e-4 && 0.35 - back.walkerImage < 1e-4);
+    assert(back.locked[walkerPage] == [true, false, false]);
+
+    // A line from before the picture loads with it hidden and the wheel not on it.
+    const before = State.load(f[0 .. 59].join(" "));
+    assert(before.walkerSpeed - 0.9 < 1e-4 && before.walkerImage == 0 && !before.imageHeld);
+    assert(back.walkerSpeed - 0.9 < 1e-4 && 0.9 - back.walkerSpeed < 1e-4);
+    assert(back.value[walkerPage][2] - 0.75 < 1e-4 && 0.75 - back.value[walkerPage][2] < 1e-4);
+
+    // A line from before the walker loads with it at its defaults.
+    const old = State.load(f[0 .. 52].join(" "));
+    assert(old.value[walkerPage] == State.init.value[walkerPage] && !old.locked[walkerPage][0]);
+    assert(old.walkerSpeed == State.init.walkerSpeed);
+}
+
 /// TL, knob, TR / ML, MC, MR / BL, BC, BR.
 string legend(ref const State st)
 {
@@ -409,6 +552,13 @@ string legend(ref const State st)
         foreach (i; 0 .. 3)
             f[3 + i] = (st.locked[st.page][i] ? "unlock " : "lock ") ~ paramNames[st.page][i];
         f[6] = f[7] = f[8] = "free";
+        if (st.page == walkerPage)
+        {
+            const held = st.locked[walkerPage][0] || st.locked[walkerPage][1] || st.locked[walkerPage][2];
+            f[1] = st.imageHeld ? "turn: opacity" : held ? "turn: locked" : "turn: speed";
+            f[6] = st.imageHeld ? "release opacity" : "image opacity";
+            f[8] = "reset";
+        }
     }
     return "legend " ~ name ~ " " ~ f[].join("|");
 }
@@ -426,6 +576,10 @@ string toast(ref const State st, Change c, string msg)
         return things[st.thing];
     case Change.thingLock:
         return st.thingLocked ? things[st.thing] ~ " locked, time stopped" : "time running";
+    case Change.reset:
+        return "reset";
+    case Change.image:
+        return st.imageHeld ? "wheel: image opacity" : "wheel: speed";
     case Change.lock:
         const i = middle(msg.strip.split[1]);
         if (st.page == scenePage)
