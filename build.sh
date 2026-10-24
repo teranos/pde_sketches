@@ -30,6 +30,8 @@ CORE=$(find "$RES/core/library" -maxdepth 1 \( -name 'core.jar' -o -name 'core-[
 
 tmp=$(mktemp -d)
 "$CLI" cli --sketch="$PWD/pages" --output="$tmp" --force --build
+# Its exit status has said 0 over a syntax error; what it leaves behind is the verdict.
+[ -f "$tmp/pages.class" ] || { echo "build.sh: the sketch did not compile"; exit 1; }
 rm -rf bin/classes "$tmp/source"
 mv "$tmp" bin/classes
 

@@ -13,7 +13,8 @@ String[][] NAMES = {
   {"walkers", "diagonals", "triangles"},
 };
 static final int WALKER = 4;
-String[] KEYS = {"ML", "MC", "MR"};
+// ML, MC, MR as the pad glyph: which key, not its name.
+String[] KEYS = {"[...#.....]", "[....#....]", "[.....#...]"};
 
 // When this build was made, read off its own class file.
 String builtAt() {
@@ -242,8 +243,8 @@ void hud(PGraphics g) {
     g.text("image " + nf(imageOpacity, 1, 2) + (imageHeld ? "  turn" : ""), s + 14 * s, by);
     g.textAlign(RIGHT, TOP);
     g.fill(150);
-    g.text("BL image  BC pause  ML+MR snap  BR reset", g.width - s, by);
     g.textAlign(LEFT, TOP);
+    glyphLine(g, "[......#..] image  [.......#.] pause  [...#.#...] snap  [........#] reset", g.width - s, by, true, color(150));
     by += 2 * s;
   }
 
@@ -252,8 +253,8 @@ void hud(PGraphics g) {
     float bx = s + i * (bw + s);
     boolean lit = live && locked[i];
     int dim = live ? color(150) : color(80);
+    glyphLine(g, KEYS[i] + " " + NAMES[page][i], bx, by, false, lit ? on : dim);
     g.fill(lit ? on : dim);
-    g.text(KEYS[i] + " " + NAMES[page][i], bx, by);
     g.text(lit ? "locked" : "", bx, by + 2.8 * s);
     g.fill(40);
     g.rect(bx, by + 1.6 * s, bw, s * 0.8);
@@ -264,6 +265,107 @@ void hud(PGraphics g) {
     g.text(nf(p[i], 1, 2), bx + bw, by);
     g.textAlign(LEFT, TOP);
   }
+}
+
+// The pad drawn as itself, as ramen draws it: square, circle, square over
+// two rows of three. "[...#.#...]" is ML and MR; "+" is half strength, and
+// a trailing "<" or ">" is the knob turning.
+java.util.regex.Pattern GLYPH = java.util.regex.Pattern.compile("\\[[.+#]{9}[<>]?\\]");
+
+void drawGlyph(PGraphics g, float x, float y, float side, String code, int col) {
+  if (side < 24) {
+    pixelGlyph(g, x, y, side, code, col);
+    return;
+  }
+  float cell = side / 3.4, gap = cell * 0.2, line = max(1, cell * 0.09);
+  // Bits, not red(): those go through the primary surface, and headless there is none.
+  float r = (col >> 16) & 255, gr = (col >> 8) & 255, b = col & 255, a = (col >>> 24) & 255;
+  g.strokeWeight(line);
+  g.stroke(r, gr, b, a);
+  for (int i = 0; i < 9; i++) {
+    float cx = x + (i % 3) * (cell + gap), cy = y + (i / 3) * (cell + gap);
+    char f = code.charAt(1 + i);
+    if (f == '.') g.noFill();
+    else g.fill(r, gr, b, f == '#' ? a : a * 0.5);
+    if (i == 1) g.ellipse(cx + cell / 2, cy + cell / 2, cell - line, cell - line);
+    else g.rect(cx + line / 2, cy + line / 2, cell - line, cell - line);
+  }
+  char spin = code.charAt(code.length() - 2);
+  if (spin == '<' || spin == '>') {
+    // Over the top of the circle, the head at the end the knob turns toward.
+    float ox = x + cell + gap + cell / 2, oy = y + cell / 2, rr = cell * 0.66;
+    float arcA = radians(210), arcB = radians(330), tip;
+    g.noFill();
+    g.arc(ox, oy, 2 * rr, 2 * rr, arcA, arcB);
+    float dx, dy;
+    if (spin == '>') { tip = arcB; dx = -sin(tip); dy = cos(tip); }
+    else { tip = arcA; dx = sin(tip); dy = -cos(tip); }
+    float tx = ox + rr * cos(tip), ty = oy + rr * sin(tip), len = rr * 0.3, wide = rr * 0.18;
+    g.line(tx - dx * len + dy * wide, ty - dy * len - dx * wide, tx, ty);
+    g.line(tx, ty, tx - dx * len - dy * wide, ty - dy * len + dx * wide);
+  }
+  g.noStroke();
+}
+
+// The small form, as ramen draws it: solid blocks on whole pixels, no
+// outlines, strength as brightness (empty 22%, half 55%, full), the knob's
+// corners cut, and a turn as the knob become an arrowhead.
+void pixelGlyph(PGraphics g, float x, float y, float side, String code, int col) {
+  int gap = side >= 20 ? 2 : 1;
+  int cell = max(4, floor((side - 2 * gap) / 3));
+  int x0 = round(x), y0 = round(y);
+  float r = (col >> 16) & 255, gr = (col >> 8) & 255, b = col & 255, a = (col >>> 24) & 255;
+  char spin = code.charAt(code.length() - 2);
+  boolean turning = spin == '<' || spin == '>';
+  g.noStroke();
+  for (int i = 0; i < 9; i++) {
+    int cx = x0 + (i % 3) * (cell + gap), cy = y0 + (i / 3) * (cell + gap);
+    char f = code.charAt(1 + i);
+    float strength = f == '#' ? 1 : f == '+' ? 0.55 : 0.22;
+    if (i == 1 && turning) {
+      g.fill(r, gr, b, a);
+      int tip = spin == '>' ? cx + cell : cx, back = spin == '>' ? cx : cx + cell;
+      g.triangle(back, cy, tip, cy + cell / 2f, back, cy + cell);
+    } else if (i == 1) {
+      g.fill(r, gr, b, a * strength);
+      int k = max(1, cell / 4);
+      g.rect(cx + k, cy, cell - 2 * k, cell);
+      g.rect(cx, cy + k, k, cell - 2 * k);
+      g.rect(cx + cell - k, cy + k, k, cell - 2 * k);
+    } else {
+      g.fill(r, gr, b, a * strength);
+      g.rect(cx, cy, cell, cell);
+    }
+  }
+}
+
+// A line of text in which any glyph is drawn as the pad, a character tall.
+// `right` puts the line's end at x. Returns how wide it was.
+float glyphLine(PGraphics g, String line, float x, float y, boolean right, int col) {
+  float side = max(14, g.textAscent()), wide = 0;
+  java.util.ArrayList<String> parts = new java.util.ArrayList<String>();
+  java.util.regex.Matcher m = GLYPH.matcher(line);
+  int at = 0;
+  while (m.find()) {
+    if (m.start() > at) parts.add(line.substring(at, m.start()));
+    parts.add(m.group());
+    at = m.end();
+  }
+  if (at < line.length()) parts.add(line.substring(at));
+  for (String part : parts) wide += GLYPH.matcher(part).matches() ? side : g.textWidth(part);
+  float cx = right ? x - wide : x;
+  g.textAlign(LEFT, TOP);
+  for (String part : parts) {
+    if (GLYPH.matcher(part).matches()) {
+      drawGlyph(g, cx, y + (g.textAscent() - side) / 2 + 1, side, part, col);
+      cx += side;
+    } else {
+      g.fill(col);
+      g.text(part, cx, y);
+      cx += g.textWidth(part);
+    }
+  }
+  return wide;
 }
 
 // Points carried along a slowly changing noise field.
