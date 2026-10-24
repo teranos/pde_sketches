@@ -45,6 +45,9 @@ struct State
     double walkerSpeed = 0.4; /// the walker's wheel, while nothing on its page is locked
     double walkerImage = 0; /// how much of the picture the walker follows shows through, 0..1
     bool imageHeld; /// BL: the walker's wheel sets the picture's opacity
+    bool walkerPaused; /// BC: the walkers stand still
+    bool[3] middleDown; /// the middle row, as the pad holds it
+    bool[3] middleToggled; /// of those, the ones whose press changed a lock
     uint width, height;
 
     double time = 0.22; /// of the day, 0..1, from midnight
@@ -168,10 +171,10 @@ struct State
             return f.join(" ");
         }
         if (page == walkerPage)
-            return format("walker %.4f %.4f %.4f %.4f %d %d %d %.4f %d", walkerSpeed,
+            return format("walker %.4f %.4f %.4f %.4f %d %d %d %.4f %d %d", walkerSpeed,
                     value[walkerPage][0], value[walkerPage][1], value[walkerPage][2],
                     locked[walkerPage][0], locked[walkerPage][1], locked[walkerPage][2],
-                    walkerImage, imageHeld);
+                    walkerImage, imageHeld, walkerPaused);
         return format("state %s %.4f %.4f %.4f %d %d %d", pages[page],
                 value[page][0], value[page][1], value[page][2],
                 locked[page][0], locked[page][1], locked[page][2]);
@@ -205,6 +208,8 @@ enum Change
     thingLock,
     reset,
     image,
+    pause,
+    snapshot,
 }
 
 size_t middle(string key)
@@ -253,15 +258,36 @@ Change handle(ref State st, string msg)
         case "MC":
         case "MR":
             const i = middle(w[1]);
+            st.middleDown[i] = true;
+            // On any page ML and MR together take a snapshot. The first of them
+            // may have locked its parameter already, and gives it back.
+            if (i != 1)
+            {
+                const other = i == 0 ? 2 : 0;
+                if (st.middleDown[other])
+                {
+                    if (st.middleToggled[other])
+                    {
+                        if (scene)
+                            st.sceneLocked[st.thing][other] = !st.sceneLocked[st.thing][other];
+                        else
+                            st.locked[st.page][other] = !st.locked[st.page][other];
+                        st.middleToggled[other] = false;
+                    }
+                    return Change.snapshot;
+                }
+            }
             if (!scene)
             {
                 st.locked[st.page][i] = !st.locked[st.page][i];
+                st.middleToggled[i] = true;
                 return Change.lock;
             }
             // "and while locked, middle row lets you select params like we have now"
             if (!st.thingLocked)
                 return Change.none;
             st.sceneLocked[st.thing][i] = !st.sceneLocked[st.thing][i];
+            st.middleToggled[i] = true;
             return Change.lock;
         case "BL":
         case "BR":
@@ -281,6 +307,12 @@ Change handle(ref State st, string msg)
             return Change.thing;
         // "bottom middle key will unlock you again, let time continue"
         case "BC":
+            // On the walker page BC stops the walkers, and starts them again.
+            if (st.page == walkerPage)
+            {
+                st.walkerPaused = !st.walkerPaused;
+                return Change.pause;
+            }
             if (!scene)
                 return Change.none;
             st.thingLocked = !st.thingLocked;
@@ -288,6 +320,15 @@ Change handle(ref State st, string msg)
         default:
             return Change.none;
         }
+    }
+    if (w.length == 2 && w[0] == "up")
+    {
+        if (w[1] == "ML" || w[1] == "MC" || w[1] == "MR")
+        {
+            st.middleDown[middle(w[1])] = false;
+            st.middleToggled[middle(w[1])] = false;
+        }
+        return Change.none;
     }
     if (w.length == 2 && w[0] == "turn")
     {
@@ -340,7 +381,9 @@ unittest
 
     // ML and MR locked: one detent moves exactly those two, MC stays.
     st.handle("down ML");
+    st.handle("up ML");
     st.handle("down MR");
+    st.handle("up MR");
     st.handle("turn cw");
     assert(st.value[0][0] == before[0][0] + step);
     assert(st.value[0][1] == before[0][1]);
@@ -353,6 +396,7 @@ unittest
 
     // Unlocking takes a parameter back out of the turn.
     st.handle("down ML");
+    st.handle("up ML");
     st.handle("turn ccw");
     assert(st.value[0][0] == before[0][0] + step);
     assert(st.value[0][2] == before[0][2]);
@@ -437,8 +481,11 @@ unittest
     assert(st.handle("down BR") == Change.none && st.thing == 2);
 
     // Locked, the middle row selects params and the wheel moves them, not time.
+    st.handle("up ML");
     assert(st.handle("down ML") == Change.lock && st.sceneLocked[2][0]);
+    st.handle("up ML");
     assert(st.handle("down MR") == Change.lock && st.sceneLocked[2][2]);
+    st.handle("up MR");
     assert(st.handle("turn cw") == Change.value);
     assert(st.time == t);
     assert(st.sceneValue[2][0] == 0.5 + step && st.sceneValue[2][1] == 0.5 && st.sceneValue[2][2] == 0.5 + step);
@@ -453,14 +500,60 @@ unittest
 
 unittest
 {
+    // ML and MR together are a snapshot on every page, and leave the locks as they were.
+    State st;
+    st.page = 1;
+    assert(st.handle("down ML") == Change.lock && st.locked[1][0]);
+    assert(st.handle("down MR") == Change.snapshot && !st.locked[1][0] && !st.locked[1][2]);
+    st.handle("up ML");
+    st.handle("up MR");
+    assert(st.handle("down MR") == Change.lock && st.locked[1][2], "alone, each still locks");
+    st.handle("up MR");
+
+    st.page = scenePage;
+    assert(st.handle("down ML") == Change.none, "the scene's unlocked middle row is free");
+    assert(st.handle("down MR") == Change.snapshot);
+    st.handle("up ML");
+    st.handle("up MR");
+    st.thingLocked = true;
+    assert(st.handle("down MR") == Change.lock && st.sceneLocked[0][2]);
+    assert(st.handle("down ML") == Change.snapshot && !st.sceneLocked[0][0] && !st.sceneLocked[0][2]);
+}
+
+unittest
+{
     import std.algorithm : canFind;
 
     State st;
     st.page = walkerPage;
 
     // Its middle row locks and the wheel moves what is locked, as on the first three pages.
-    assert(st.forRenderer == "walker 0.4000 0.3000 0.5000 0.2000 0 0 0 0.0000 0");
-    assert(legend(st).canFind("turn: speed|page right|lock walkers|lock diagonals|lock triangles|image opacity|free|reset"));
+    assert(st.forRenderer == "walker 0.4000 0.3000 0.5000 0.2000 0 0 0 0.0000 0 0");
+    assert(legend(st).canFind("turn: speed|page right|lock walkers|lock diagonals|lock triangles|image opacity|pause|reset"));
+
+    // BC stops the walkers, and BC starts them again.
+    assert(st.handle("down BC") == Change.pause && st.walkerPaused);
+    assert(st.forRenderer == "walker 0.4000 0.3000 0.5000 0.2000 0 0 0 0.0000 0 1");
+    assert(toast(st, Change.pause, "down BC") == "paused");
+    assert(legend(st).canFind("|resume|reset"));
+    assert(st.handle("down BC") == Change.pause && !st.walkerPaused);
+    assert(toast(st, Change.pause, "down BC") == "walking");
+
+    // ML and MR together take a snapshot and leave both parameters as they were.
+    assert(st.handle("down ML") == Change.lock && st.locked[walkerPage][0]);
+    assert(st.handle("down MR") == Change.snapshot && !st.locked[walkerPage][0] && !st.locked[walkerPage][2]);
+    assert(toast(st, Change.snapshot, "down MR") == "snapshot saved");
+    st.handle("up ML");
+    st.handle("up MR");
+    // Either order, and each alone still locks.
+    assert(st.handle("down MR") == Change.lock && st.locked[walkerPage][2]);
+    assert(st.handle("down ML") == Change.snapshot && !st.locked[walkerPage][2] && !st.locked[walkerPage][0]);
+    st.handle("up MR");
+    st.handle("up ML");
+    assert(st.handle("down MR") == Change.lock && st.locked[walkerPage][2]);
+    st.handle("up MR");
+    assert(st.handle("down MR") == Change.lock && !st.locked[walkerPage][2]);
+    st.handle("up MR");
 
     // Nothing locked: the wheel is the walker's speed, and BR starts it over.
     const speed = st.walkerSpeed;
@@ -484,7 +577,7 @@ unittest
     assert(legend(st).canFind("turn: opacity") && legend(st).canFind("release opacity"));
     assert(st.handle("turn cw") == Change.value && st.walkerImage == step);
     assert(st.value[walkerPage][1] == diagonals + step && st.walkerSpeed == speed + step);
-    assert(st.forRenderer == format("walker %.4f 0.3000 %.4f 0.2000 0 1 0 0.0200 1", st.walkerSpeed, st.value[walkerPage][1]));
+    assert(st.forRenderer == format("walker %.4f 0.3000 %.4f 0.2000 0 1 0 0.0200 1 0", st.walkerSpeed, st.value[walkerPage][1]));
     foreach (_; 0 .. 100)
         st.handle("turn cw");
     assert(st.walkerImage == 1.0, "clamped to 0..1");
@@ -557,6 +650,7 @@ string legend(ref const State st)
             const held = st.locked[walkerPage][0] || st.locked[walkerPage][1] || st.locked[walkerPage][2];
             f[1] = st.imageHeld ? "turn: opacity" : held ? "turn: locked" : "turn: speed";
             f[6] = st.imageHeld ? "release opacity" : "image opacity";
+            f[7] = st.walkerPaused ? "resume" : "pause";
             f[8] = "reset";
         }
     }
@@ -580,6 +674,10 @@ string toast(ref const State st, Change c, string msg)
         return "reset";
     case Change.image:
         return st.imageHeld ? "wheel: image opacity" : "wheel: speed";
+    case Change.pause:
+        return st.walkerPaused ? "paused" : "walking";
+    case Change.snapshot:
+        return "snapshot saved";
     case Change.lock:
         const i = middle(msg.strip.split[1]);
         if (st.page == scenePage)

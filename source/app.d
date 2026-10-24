@@ -175,7 +175,7 @@ void main()
 
         if (fds[0].revents & POLLIN)
         {
-            bool tellRenderer, tellLegend, sizeChanged, wipe;
+            bool tellRenderer, tellLegend, sizeChanged, wipe, snap;
             string said;
             for (;;)
             {
@@ -193,6 +193,7 @@ void main()
                 }
                 tellRenderer = true;
                 wipe |= c == Change.reset;
+                snap |= c == Change.snapshot;
                 if (c != Change.value && c != Change.time)
                     tellLegend = true;
                 if (auto t = toast(st, c, msg))
@@ -205,6 +206,8 @@ void main()
                 r.tell(st.forRenderer);
                 if (wipe)
                     r.tell("reset");
+                if (snap)
+                    r.tell("snapshot");
                 try
                     write(statePath, st.save);
                 catch (Exception)

@@ -59,12 +59,14 @@ public class Runner {
         } else if (f[0].equals("state") && f.length == 8) {
           s.setState(f[1], Float.parseFloat(f[2]), Float.parseFloat(f[3]), Float.parseFloat(f[4]),
               f[5].equals("1"), f[6].equals("1"), f[7].equals("1"));
-        } else if (f[0].equals("walker") && f.length == 10) {
-          // walker <speed> <three values> <three locks> <image opacity> <image held>
+        } else if (f[0].equals("walker") && f.length == 11) {
+          // walker <speed> <three values> <three locks> <image opacity> <image held> <paused>
           s.setWalker(Float.parseFloat(f[1]), Float.parseFloat(f[2]), Float.parseFloat(f[3]), Float.parseFloat(f[4]),
-              f[5].equals("1"), f[6].equals("1"), f[7].equals("1"), Float.parseFloat(f[8]), f[9].equals("1"));
+              f[5].equals("1"), f[6].equals("1"), f[7].equals("1"), Float.parseFloat(f[8]), f[9].equals("1"), f[10].equals("1"));
         } else if (f[0].equals("reset")) {
           s.resetWalk();
+        } else if (f[0].equals("snapshot")) {
+          s.snapshot();
         }
       }
       if (map != null) {

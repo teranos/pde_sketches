@@ -28,7 +28,9 @@ String builtAt() {
 
 String built = builtAt();
 
-PGraphics pg;
+PGraphics pg; // the page, with no HUD on it
+PGraphics hudLayer; // the HUD, clear around it
+PGraphics composite; // the two, which is what goes out
 PFont font;
 int page;
 float[] p = {0.4, 0.3, 0.3};
@@ -51,6 +53,8 @@ void resizeTo(int w, int h) {
   pg.beginDraw();
   pg.background(page == WALKER ? color(0) : color(6, 8, 14));
   pg.endDraw();
+  hudLayer = newLayer(w, h);
+  composite = newLayer(w, h);
   walker.reset(w, h);
   particles.reset(w, h);
   startfield.reset(w, h);
@@ -87,16 +91,39 @@ void setScene(float t, boolean running, int thing, boolean thingLocked, float[] 
 float walkSpeed = 0.4;
 float imageOpacity = 0;
 boolean imageHeld;
+boolean walkPaused;
+boolean snapshotNext;
+String savedAs = ""; // the last snapshot, by file name
+long savedAt; // and when, so the HUD names it for a few seconds
 
 // The walker's own line: its speed, which the wheel moves, then its three,
-// then how much of the picture it follows shows, and whether the wheel has it.
-void setWalker(float speed, float a, float b, float c, boolean la, boolean lb, boolean lc, float opacity, boolean held) {
+// then how much of the picture it follows shows, whether the wheel has it,
+// and whether the walkers stand still.
+void setWalker(float speed, float a, float b, float c, boolean la, boolean lb, boolean lc, float opacity, boolean held, boolean paused) {
   show(WALKER);
   walkSpeed = speed;
   p[0] = a; p[1] = b; p[2] = c;
   locked[0] = la; locked[1] = lb; locked[2] = lc;
   imageOpacity = opacity;
   imageHeld = held;
+  walkPaused = paused;
+}
+
+void snapshot() {
+  if (pg != null) snapshotNext = true;
+}
+
+// The page as it is, without the HUD, as a PNG in captures/ beside the picture.
+// The walker's own canvas stops where its HUD rows start.
+void saveSnapshot() {
+  snapshotNext = false;
+  String path = System.getProperty("sketches.image", "image/walker.jpg");
+  java.io.File dir = new java.io.File(new java.io.File(path).getAbsoluteFile().getParentFile(), "captures");
+  dir.mkdirs();
+  String name = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss").format(new java.util.Date()) + "-" + PAGES[page] + ".png";
+  pg.get(0, 0, pg.width, page == WALKER ? pg.height - walker.hudRows : pg.height).save(new java.io.File(dir, name).getAbsolutePath());
+  savedAs = name;
+  savedAt = System.currentTimeMillis();
 }
 
 // A drawing surface that is clear where nothing is drawn.
@@ -128,10 +155,19 @@ int[] frame() {
     scene.draw(pg.pixels);
     pg.updatePixels();
   }
-  hud(pg);
+  if (snapshotNext) saveSnapshot();
   pg.endDraw();
-  pg.loadPixels();
-  return pg.pixels;
+
+  hudLayer.beginDraw();
+  hudLayer.clear();
+  hud(hudLayer);
+  hudLayer.endDraw();
+  composite.beginDraw();
+  composite.image(pg, 0, 0);
+  composite.image(hudLayer, 0, 0);
+  composite.endDraw();
+  composite.loadPixels();
+  return composite.pixels;
 }
 
 // What is up and what the knob will move, so a frame shows its own state.
@@ -156,8 +192,9 @@ void hud(PGraphics g) {
     x += g.textWidth(t) + s;
   }
   g.textAlign(RIGHT, TOP);
-  g.fill(110);
-  g.text("built " + built, g.width - s, y0);
+  boolean fresh = System.currentTimeMillis() - savedAt < 6000 && savedAs.length() > 0;
+  g.fill(fresh || (wk && walkPaused) ? color(255, 190, 60) : color(110));
+  g.text(fresh ? "saved " + savedAs.substring(9) : (wk && walkPaused ? "paused   " : "") + "built " + built, g.width - s, y0);
   g.textAlign(LEFT, TOP);
 
   float by = y0 + 2 * s;
@@ -195,7 +232,7 @@ void hud(PGraphics g) {
     g.text("image " + nf(imageOpacity, 1, 2) + (imageHeld ? "  turn" : ""), s + 14 * s, by);
     g.textAlign(RIGHT, TOP);
     g.fill(150);
-    g.text("BL image   BR reset", g.width - s, by);
+    g.text("BL image  BC pause  ML+MR snap  BR reset", g.width - s, by);
     g.textAlign(LEFT, TOP);
     by += 2 * s;
   }
@@ -331,19 +368,19 @@ class Startfield {
 // White lines on black, like traces on a board. Walkers set out from the
 // middle on straight runs and turn by 90 or 45 degrees, and where one turns
 // it leaves a ring, now and then a triangle. Nothing fades. Walkers head for
-// room and end runs by forms; a form is black inside, over any line under it.
+// room and end runs by forms; a form is part clear, over the line under it.
 class Walker {
   int max = 24;
   float[] x = new float[max], y = new float[max];
   int[] heading = new int[max]; // in 45 degree steps, 0 is east, turning clockwise
   float[] left = new float[max]; // what is left of the run, in pixels
   float cell = 12; // a run is a few of these
-  float mark = 5; // the radius of what a turn leaves
+  float mark = 3; // the radius of what a turn leaves
   float sharp = 0.5; // how hard a crowded way is avoided
   int hudRows = 9 * 14; // the bottom rows belong to the HUD
   int cols, rows;
   float[] ink; // per cell, the length of line drawn in it, in cells
-  ArrayList<ArrayList<float[]>> formsIn = new ArrayList<ArrayList<float[]>>(); // per cell: x, y, heading, 1 for a triangle, red, green, blue
+  ArrayList<ArrayList<float[]>> formsIn = new ArrayList<ArrayList<float[]>>(); // per cell: x, y, heading, 1 for a triangle, red, green, blue, size
   float follow = 3; // how hard the white of the picture pulls
   float thin = 0.3; // the weight of a line where the picture is black, or not there
   float grip = 0.2; // the chance a step through the darkest ends the run
@@ -353,24 +390,35 @@ class Walker {
   float shownX, shownY;
   int fitW, fitH;
   float[] light; // per cell, how white the picture is there, 0..1
-  PGraphics layer; // the lines and forms, clear where nothing is drawn
+  PGraphics layer; // the lines, clear where nothing is drawn
+  PGraphics formLayer; // the forms, over the lines
+  ArrayList<float[]> fresh = new ArrayList<float[]>(); // forms made since they were last drawn
+  float take = 0.6; // how much of the picture's colour a line takes on, against white
+  float[] wob = new float[max]; // per walker, how heavy its run is against the picture
+  float[] shade = new float[max]; // and how much lighter or darker
 
   void reset(int w, int h) {
     cols = ceil(w / cell);
     rows = ceil((h - hudRows) / cell);
     ink = new float[cols * rows];
     formsIn.clear();
+    fresh.clear();
     for (int c = 0; c < cols * rows; c++) formsIn.add(new ArrayList<float[]>());
     layer = newLayer(w, h);
     layer.beginDraw();
     layer.clear();
     layer.endDraw();
+    formLayer = newLayer(w, h);
+    formLayer.beginDraw();
+    formLayer.clear();
+    formLayer.endDraw();
     fit(w, h - hudRows);
     for (int i = 0; i < max; i++) {
       x[i] = w / 2;
       y[i] = (h - hudRows) / 2;
       heading[i] = int(random(8));
       left[i] = run();
+      vary(i);
       place(i, w, h - hudRows);
     }
   }
@@ -525,7 +573,7 @@ class Walker {
     for (int n = 2; n <= 11; n++) {
       float ex = px + cos(a) * cell * n, ey = py + sin(a) * cell * n;
       if (!inside(g, ex, ey)) continue;
-      w[n - 2] = formsBetween(ex, ey, 0, mark * 3) > 0 ? 0.1 : formsBetween(ex, ey, mark * 3, cell * 4) > 0 ? 5 : 1;
+      w[n - 2] = formsBetween(ex, ey, 0, mark * 4) > 0 ? 0.1 : formsBetween(ex, ey, mark * 4, mark * 4 + cell * 3) > 0 ? 5 : 1;
       float lit = 0;
       for (int k = 1; k <= n; k++) lit += lightAt(px + cos(a) * cell * k, py + sin(a) * cell * k);
       w[n - 2] *= exp(follow * (lit / n - 1));
@@ -535,10 +583,9 @@ class Walker {
   }
 
   // The picture's average colour under a form centred here, black where there is none.
-  float[] behind(float px, float py) {
+  float[] behind(float px, float py, int r) {
     float[] sum = new float[3];
     if (shown == null) return sum;
-    int r = ceil(mark * 1.4);
     int count = 0;
     for (int dy = -r; dy <= r; dy++) {
       for (int dx = -r; dx <= r; dx++) {
@@ -556,17 +603,31 @@ class Walker {
     return sum;
   }
 
-  // A form with its border, thin and dim, or without, just inside where the border was.
-  void drawForm(PGraphics g, float[] f, boolean border) {
-    float r = f[3] > 0.5 ? mark * 1.4 : mark;
-    if (border) {
-      g.stroke(170);
-      g.strokeWeight(lerp(thin, 0.6, lightAt(f[0], f[1])));
-    } else {
-      g.noStroke();
-      r -= 0.7;
-    }
-    g.fill(f[4], f[5], f[6]);
+  // A new run is heavier or lighter, brighter or dimmer, than the one before.
+  void vary(int i) {
+    wob[i] = random(0.6, 1.5);
+    shade[i] = random(-40, 15);
+  }
+
+  // The picture's colour at a point, black off it. White where there is no picture.
+  int pictureAt(float px, float py) {
+    if (shown == null) return 0xFFFFFF;
+    int sx = int(px - shownX), sy = int(py - shownY);
+    if (px < shownX || py < shownY || sx >= shown.width || sy >= shown.height) return 0;
+    return shown.pixels[sy * shown.width + sx] & 0xFFFFFF;
+  }
+
+  // One channel of a line: white pulled towards the picture, then shaded, for walker i.
+  float takeOn(int channel, int i) {
+    return constrain(lerp(255, channel, take) + shade[i], 0, 255);
+  }
+
+  // A form is part clear, with a thin dim border.
+  void drawForm(PGraphics g, float[] f) {
+    float r = f[3] > 0.5 ? f[7] * 1.4 : f[7];
+    g.stroke(170, 200);
+    g.strokeWeight(lerp(thin, 0.6, lightAt(f[0], f[1])));
+    g.fill(f[4], f[5], f[6], 150);
     if (f[3] > 0.5) {
       g.triangle(f[0] + cos(f[2]) * r, f[1] + sin(f[2]) * r,
           f[0] + cos(f[2] + TWO_PI / 3) * r, f[1] + sin(f[2] + TWO_PI / 3) * r,
@@ -575,30 +636,17 @@ class Walker {
       g.ellipse(f[0], f[1], r * 2, r * 2);
     }
     g.noFill();
-    g.stroke(255);
-  }
-
-  // The forms near a point are drawn again, over the line that just ran there.
-  void cover(PGraphics g, float px, float py) {
-    int cx = int(px / cell), cy = int(py / cell);
-    for (int ay = max(cy - 1, 0); ay <= min(cy + 1, rows - 1); ay++) {
-      for (int ax = max(cx - 1, 0); ax <= min(cx + 1, cols - 1); ax++) {
-        for (float[] f : formsIn.get(ay * cols + ax)) {
-          if (dist(px, py, f[0], f[1]) < mark * 2.4) drawForm(g, f, false);
-        }
-      }
-    }
   }
 
   boolean inside(PGraphics g, float px, float py) {
-    float m = mark * 1.5;
+    float m = mark * 2.2;
     return px > m && px < g.width - m && py > m && py < g.height - hudRows - m;
   }
 
   void draw(PGraphics out, float speed, float walkers, float diagonals, float triangles, float opacity) {
     PGraphics g = layer;
     g.beginDraw();
-    int n = round(lerp(1, max, walkers));
+    int n = walkPaused ? 0 : round(lerp(1, max, walkers));
     float pace = lerp(1, 24, speed);
     g.stroke(255);
     g.strokeWeight(1);
@@ -617,10 +665,12 @@ class Walker {
           turn(g, i, diagonals, triangles, false);
           continue;
         }
-        g.strokeWeight(lerp(thin, 1, lightAt((x[i] + nx) / 2, (y[i] + ny) / 2)));
+        float mx = (x[i] + nx) / 2, my = (y[i] + ny) / 2;
+        int under = pictureAt(mx, my);
+        g.stroke(takeOn((under >> 16) & 255, i), takeOn((under >> 8) & 255, i), takeOn(under & 255, i));
+        g.strokeWeight(lerp(thin, 1, lightAt(mx, my)) * wob[i]);
         g.line(x[i], y[i], nx, ny);
-        ink[at((x[i] + nx) / 2, (y[i] + ny) / 2)] += d / cell;
-        cover(g, (x[i] + nx) / 2, (y[i] + ny) / 2);
+        ink[at(mx, my)] += d / cell;
         x[i] = nx;
         y[i] = ny;
         left[i] -= d;
@@ -631,6 +681,12 @@ class Walker {
     g.noStroke();
     g.endDraw();
 
+    // The forms go on their own layer, over the lines, so a line passes behind one.
+    formLayer.beginDraw();
+    for (float[] f : fresh) drawForm(formLayer, f);
+    fresh.clear();
+    formLayer.endDraw();
+
     out.background(0);
     if (shown != null && opacity > 0) {
       out.tint(255, opacity * 255);
@@ -638,6 +694,7 @@ class Walker {
       out.noTint();
     }
     out.image(layer, 0, 0);
+    out.image(formLayer, 0, 0);
   }
 
   // By 90 degrees or by 45, to the left or the right, the way with the most
@@ -648,6 +705,7 @@ class Walker {
       place(i, g.width, g.height - hudRows);
       heading[i] = int(random(8));
       left[i] = run();
+      vary(i);
       return;
     }
     int[] turns = {1, -1, 2, -2, 3, -3, 4};
@@ -660,7 +718,7 @@ class Walker {
       if (by > 2 && !wall) continue;
       float a = ((heading[i] + turns[t] + 8) % 8) * QUARTER_PI;
       if (!inside(g, x[i] + cos(a) * cell * 2, y[i] + sin(a) * cell * 2)) continue;
-      room[t] =ahead(i, (heading[i] + turns[t] + 8) % 8);
+      room[t] = ahead(i, (heading[i] + turns[t] + 8) % 8);
       w[t] = by == 1 ? diagonals : by == 2 ? 1 - diagonals : by == 3 ? 0.15 : 0.05;
       if (w[t] > 0) {
         least = min(least, room[t]);
@@ -681,6 +739,7 @@ class Walker {
       place(i, g.width, g.height - hudRows);
       heading[i] = int(random(8));
       left[i] = run();
+      vary(i);
       return;
     }
     int next;
@@ -694,11 +753,14 @@ class Walker {
     heading[i] = next;
     float a = next * QUARTER_PI;
     left[i] = runFrom(g, x[i], y[i], a);
+    vary(i);
 
-    if (formsBetween(x[i], y[i], 0, mark * 2) > 0) return; // a form is here already
-    float[] under = behind(x[i], y[i]);
-    float[] f = {x[i], y[i], a, random(1) < triangles ? 1 : 0, under[0], under[1], under[2]};
+    if (formsBetween(x[i], y[i], 0, mark * 3) > 0) return; // a form is here already
+    // Half the size in black, one and a half in white, so the white is built up in larger pieces.
+    float size = mark * (shown == null ? 1 : lerp(0.5, 1.5, lightAt(x[i], y[i])));
+    float[] under = behind(x[i], y[i], ceil(size * 1.4));
+    float[] f = {x[i], y[i], a, random(1) < triangles ? 1 : 0, under[0], under[1], under[2], size};
     formsIn.get(at(f[0], f[1])).add(f);
-    drawForm(g, f, true);
+    fresh.add(f);
   }
 }
